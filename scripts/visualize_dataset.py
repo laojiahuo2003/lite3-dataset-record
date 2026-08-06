@@ -86,7 +86,8 @@ def _load_map_background(scenes_dir: str, map_id: str) -> tuple:
 
     if yaml and os.path.exists(scene_path):
         scene = yaml.safe_load(open(scene_path)) or {}
-        rooms = scene.get("rooms", [])
+        # Support both old ("rooms") and new ("regions") scene schema
+        rooms = scene.get("regions", scene.get("rooms", []))
 
     return img, extent, rooms
 
@@ -99,13 +100,14 @@ def _compose_map_trajectory(output_dir: str) -> list[dict]:
     rows = list(csv.DictReader(open(tf_path)))
 
     # 分开两层 TF，按时间排序
+    # tf_trajectory.csv: t, topic, child_frame_id, parent_frame_id, tx, ty, tz, qx, qy, qz, qw
     map_odom = sorted(
-        [(int(r["timestamp_ns"]), float(r["tx"]), float(r["ty"]), float(r["rz"]), float(r["rw"]))
-         for r in rows if r["frame_id"] == "map" and r["child_frame_id"] == "odom"],
+        [(int(r["t"]), float(r["tx"]), float(r["ty"]), float(r["qz"]), float(r["qw"]))
+         for r in rows if r["parent_frame"] == "map" and r["child_frame"] == "odom"],
         key=lambda x: x[0])
     odom_bl = sorted(
-        [(int(r["timestamp_ns"]), float(r["tx"]), float(r["ty"]), float(r["rz"]), float(r["rw"]))
-         for r in rows if r["frame_id"] == "odom" and r["child_frame_id"] == "base_link"],
+        [(int(r["t"]), float(r["tx"]), float(r["ty"]), float(r["qz"]), float(r["qw"]))
+         for r in rows if r["parent_frame"] == "odom" and r["child_frame"] == "base_link"],
         key=lambda x: x[0])
 
     if not map_odom:
@@ -132,14 +134,60 @@ def _compose_map_trajectory(output_dir: str) -> list[dict]:
         cx = mx + cos_m * ox - sin_m * oy
         cy = my + sin_m * ox + cos_m * oy
 
-        result.append({"tx": cx, "ty": cy, "timestamp_ns": t_mo,
+        result.append({"tx": cx, "ty": cy, "t": t_mo,
                        "frame_id": "map", "child_frame_id": "base_link"})
     return result
 
 
-def _quat_cos_sin(rz: float, rw: float) -> tuple:
-    """从 2D 四元数 (0,0,rz,rw) 提取 cos/sin。"""
-    return (1 - 2 * rz * rz), (2 * rz * rw)
+def _quat_cos_sin(qz: float, qw: float) -> tuple:
+    """从 2D 四元数 (0,0,qz,qw) 提取 cos/sin。"""
+    return (1 - 2 * qz * qz), (2 * qz * qw)
+
+
+def _node_position(node: dict) -> tuple:
+    """Extract (x, y, z) from either old or new memory node schema."""
+    sd = node.get("spatial_data", {})
+    # New schema: camera_params.camera_pose
+    cp = node.get("camera_params") or {}
+    cpose = cp.get("camera_pose") or {}
+    if cpose and "x" in cpose:
+        return (float(cpose["x"]), float(cpose["y"]), float(cpose.get("z", 0)))
+    # Old schema: spatial_data.position
+    pos = sd.get("position") or {}
+    if pos and "x" in pos:
+        return (float(pos["x"]), float(pos["y"]), float(pos.get("z", 0)))
+    # Fallback: first object
+    objs = sd.get("objects", [])
+    if objs:
+        return (float(objs[0].get("x", 0)), float(objs[0].get("y", 0)), float(objs[0].get("z", 0)))
+    return (0.0, 0.0, 0.0)
+
+
+def _node_image_refs(node: dict) -> list:
+    """Extract image_refs from either old or new schema."""
+    refs = node.get("image_refs", [])
+    # New schema: "session_001/images/frame_xxx.png"
+    # Old schema: "data/images/frame_xxx.png"
+    return refs
+
+
+def _node_summary(node: dict) -> str:
+    """Extract summary from either old or new schema."""
+    zh = node.get("summary_zh", "")
+    en = node.get("summary_en", "")
+    if zh:
+        return zh
+    return node.get("summary", "")
+
+
+def _find_scenes_dir(project_dir: str) -> str:
+    """Auto-discover the scenes directory (e.g. datasets/scenes1)."""
+    datasets = os.path.join(project_dir, "datasets")
+    for name in sorted(os.listdir(datasets)):
+        full = os.path.join(datasets, name)
+        if os.path.isdir(full) and name.startswith("scenes"):
+            return full
+    return os.path.join(datasets, "scenes")  # fallback
 
 
 def _detect_map_id(output_dir: str, project_dir: str) -> str:
@@ -160,8 +208,8 @@ def _detect_map_id(output_dir: str, project_dir: str) -> str:
 def plot_trajectory(ax, traj: list[dict], nodes: list[dict], images_idx: list[dict],
                     map_img=None, map_extent=None, rooms=None, map_label: str = ""):
     """绘制2D轨迹（俯视图）+ 记忆节点 + 图像采样点，可选地图背景。"""
-    tx = [float(r["tx"]) for r in traj]
-    ty = [float(r["ty"]) for r in traj]
+    tx = [float(r.get("tx", r.get("x", 0))) for r in traj]
+    ty = [float(r.get("ty", r.get("y", 0))) for r in traj]
 
     # 地图背景
     if map_img is not None and map_extent is not None:
@@ -193,15 +241,15 @@ def plot_trajectory(ax, traj: list[dict], nodes: list[dict], images_idx: list[di
                    linewidth=1.5, zorder=5, label=f"终点 ({tx[-1]:.2f}, {ty[-1]:.2f})")
 
     # 记忆节点
-    nx = [n["spatial_data"]["position"]["x"] for n in nodes]
-    ny = [n["spatial_data"]["position"]["y"] for n in nodes]
+    nx = [_node_position(n)[0] for n in nodes]
+    ny = [_node_position(n)[1] for n in nodes]
     ax.scatter(nx, ny, s=50, marker="D", color="#FF851B", edgecolors="white",
                linewidth=0.8, zorder=5, label=f"记忆节点 ({len(nodes)}个)")
 
     # 节点编号
     for n in nodes:
-        ax.annotate(str(n["node_id"]), (n["spatial_data"]["position"]["x"],
-                    n["spatial_data"]["position"]["y"]),
+        px, py = _node_position(n)[0], _node_position(n)[1]
+        ax.annotate(str(n["node_id"]), (px, py),
                     textcoords="offset points", xytext=(4, 4), fontsize=6,
                     color="#555555")
 
@@ -218,10 +266,12 @@ def plot_trajectory(ax, traj: list[dict], nodes: list[dict], images_idx: list[di
 
 def plot_velocity(ax, odom: list[dict]):
     """绘制线速度和角速度曲线。"""
-    t0 = int(odom[0]["timestamp_ns"])
-    ts = [(int(r["timestamp_ns"]) - t0) / 1e9 for r in odom]
-    lin_v = [math.sqrt(float(r["lin_vel_x"])**2 + float(r["lin_vel_y"])**2) for r in odom]
-    ang_v = [abs(float(r["ang_vel_z"])) for r in odom]
+    t0 = int(float(odom[0].get("t", odom[0].get("timestamp_ns", 0))))
+    ts = [(int(float(r.get("t", r.get("timestamp_ns", 0)))) - t0) / 1e9 for r in odom]
+    lin_v = [math.sqrt(float(r.get("v_linear_x", r.get("lin_vel_x", 0)))**2 +
+                       float(r.get("v_linear_y", r.get("lin_vel_y", 0)))**2)
+             for r in odom]
+    ang_v = [abs(float(r.get("v_angular_z", r.get("ang_vel_z", 0)))) for r in odom]
 
     ax2 = ax.twinx()
     ax.plot(ts, lin_v, linewidth=0.8, color="#4A90D9", alpha=0.8, label="线速度 (m/s)")
@@ -243,10 +293,10 @@ def plot_image_strip(ax, output_dir: str, images_idx: list[dict], nodes: list[di
     """沿轨迹等距选取图像缩略图，横向排列。"""
     # 选取与记忆节点关联的图像
     node_images = []
-    img_map = {img["filename"]: img for img in images_idx}
+    img_map = {os.path.basename(img["file_path"]): img for img in images_idx}
 
     for node in nodes:
-        for ref in node.get("image_refs", []):
+        for ref in _node_image_refs(node):
             fname = os.path.basename(ref)
             if fname in img_map:
                 node_images.append((node["node_id"], fname))
@@ -330,15 +380,19 @@ def plot_statistics(ax, output_dir: str, traj, odom, images_idx, nodes, lidar_di
     """数据统计面板。"""
     ax.axis("off")
 
-    t0 = int(traj[0]["timestamp_ns"])
-    t1 = int(traj[-1]["timestamp_ns"])
+    # traj uses "t" (from _compose_map_trajectory or base_link_pose.csv)
+    # odom uses "timestamp_ns" (from odometry.csv)
+    t0 = int(traj[0].get("t", traj[0].get("timestamp_ns", 0)))
+    t1 = int(traj[-1].get("t", traj[-1].get("timestamp_ns", 0)))
     duration = (t1 - t0) / 1e9
 
-    tx = [float(r["tx"]) for r in traj]
-    ty = [float(r["ty"]) for r in traj]
+    tx = [float(r.get("tx", r.get("x", 0))) for r in traj]
+    ty = [float(r.get("ty", r.get("y", 0))) for r in traj]
     path_len = sum(math.sqrt((tx[i]-tx[i-1])**2 + (ty[i]-ty[i-1])**2) for i in range(1, len(tx)))
 
-    lin_v = [math.sqrt(float(r["lin_vel_x"])**2 + float(r["lin_vel_y"])**2) for r in odom]
+    lin_v = [math.sqrt(float(r.get("v_linear_x", r.get("lin_vel_x", 0)))**2 +
+                       float(r.get("v_linear_y", r.get("lin_vel_y", 0)))**2)
+             for r in odom]
     avg_v = np.mean(lin_v) if lin_v else 0
 
     # 点云统计：数 PCD 文件
@@ -350,6 +404,16 @@ def plot_statistics(ax, output_dir: str, traj, odom, images_idx, nodes, lidar_di
     depth_files = _glob.glob(os.path.join(depth_dir, "*.png")) if os.path.isdir(depth_dir) else []
     depth_info = f"{len(depth_files)} 帧" if depth_files else "N/A"
 
+    # 从第一张实际图片读取分辨率
+    img_res = "N/A"
+    if images_idx:
+        img_path = os.path.join(output_dir, images_idx[0].get("file_path", ""))
+        if os.path.exists(img_path):
+            img = cv2.imread(img_path)
+            if img is not None:
+                h, w = img.shape[:2]
+                img_res = f"{w}x{h}"
+
     stats = [
         ("[Time] 巡检时长", f"{duration:.1f} 秒"),
         ("[Dist] 轨迹长度", f"{path_len:.1f} m"),
@@ -360,7 +424,7 @@ def plot_statistics(ax, output_dir: str, traj, odom, images_idx, nodes, lidar_di
         ("[Node] 记忆节点", f"{len(nodes):,}"),
         ("[LiDAR] 激光雷达", lidar_info),
         ("[Vel] 平均速度", f"{avg_v:.3f} m/s"),
-        ("[Res] 图像分辨率", f"{images_idx[0]['width']}x{images_idx[0]['height']}"),
+        ("[Res] 图像分辨率", img_res),
         ("[Robot] 平台", "Deep Robotics Lite3"),
         ("[LiDAR] 激光雷达", "Livox MID-360"),
         ("[Cam] 相机", "Orbbec Gemini 330"),
@@ -397,7 +461,7 @@ def visualize(output_dir: str):
 
     if map_traj:
         traj = map_traj
-        scenes_dir = os.path.join(project_dir, "datasets", "scenes")
+        scenes_dir = _find_scenes_dir(project_dir)
         if map_id:
             map_img, map_extent, rooms = _load_map_background(scenes_dir, map_id)
             map_label = f"地图 {map_id}" if map_img is not None else f"map→base_link (无地图图)"
@@ -458,7 +522,7 @@ def visualize_memory_nodes(output_dir: str):
     """生成记忆节点详情图。"""
     nodes = load_json(os.path.join(output_dir, "memory_nodes.json"))
     images_idx = load_csv(os.path.join(output_dir, "images_index.csv"))
-    img_map = {img["filename"]: img for img in images_idx}
+    img_map = {os.path.basename(img["file_path"]): img for img in images_idx}
     images_dir = os.path.join(output_dir, "images")
 
     # 选取最多 20 个节点
@@ -477,7 +541,7 @@ def visualize_memory_nodes(output_dir: str):
         ax = axes[i]
         # 找关联图像
         img_shown = False
-        for ref in node.get("image_refs", []):
+        for ref in _node_image_refs(node):
             fname = os.path.basename(ref)
             img_path = os.path.join(images_dir, fname)
             if os.path.exists(img_path):
@@ -491,8 +555,8 @@ def visualize_memory_nodes(output_dir: str):
             ax.text(0.5, 0.5, "无图像", ha="center", va="center", transform=ax.transAxes,
                     color="gray")
 
-        pos = node["spatial_data"]["position"]
-        ax.set_title(f"节点 #{node['node_id']}\n({pos['x']:.1f},{pos['y']:.1f},{pos['z']:.1f})",
+        pos = _node_position(node)
+        ax.set_title(f"节点 #{node['node_id']}\n({pos[0]:.1f},{pos[1]:.1f},{pos[2]:.1f})",
                      fontsize=8)
         ax.axis("off")
 
@@ -513,12 +577,21 @@ def visualize_memory_nodes(output_dir: str):
 # ── CLI ───────────────────────────────────────────────────
 
 def _discover_sessions(datasets_root: str) -> list[str]:
-    """自动发现 datasets/ 下所有包含 base_link_pose.csv 的 session 目录。"""
+    """Auto-discover sessions under datasets/*/ (e.g. datasets/scenes1/session_*)."""
     sessions = []
+    # Check for sessions directly under datasets/ (old format)
     for d in sorted(os.listdir(datasets_root)):
         full = os.path.join(datasets_root, d)
         if os.path.isdir(full) and os.path.exists(os.path.join(full, "base_link_pose.csv")):
             sessions.append(full)
+    # Also check under scenes*/ subdirs (new format)
+    for d in sorted(os.listdir(datasets_root)):
+        full = os.path.join(datasets_root, d)
+        if os.path.isdir(full) and d.startswith("scenes"):
+            for sd in sorted(os.listdir(full)):
+                sfull = os.path.join(full, sd)
+                if os.path.isdir(sfull) and os.path.exists(os.path.join(sfull, "base_link_pose.csv")):
+                    sessions.append(sfull)
     return sessions
 
 

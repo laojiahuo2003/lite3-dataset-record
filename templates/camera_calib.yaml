@@ -1,0 +1,41 @@
+# Camera calibration for session: {{session_id}}
+# Platform: Deep Robotics Lite3 + Orbbec Gemini 330
+#
+# NOTE: fx/fy/cx/cy values below are PLACEHOLDERS.
+# To get real values while the camera is running:
+#   ros2 topic echo /camera/color/camera_info --once | grep "^\s*k:"
+# Or check Orbbec SDK docs for Gemini 330 at 640x480 resolution.
+
+session_id: "{{session_id}}"
+calib_date: ""
+
+rgb:
+  fx: 525.0
+  fy: 525.0
+  cx: 319.5
+  cy: 239.5
+  width: 640
+  height: 480
+  distortion: [0.0, 0.0, 0.0, 0.0, 0.0]
+  frame_rate: 15.0
+
+depth:
+  fx: 525.0
+  fy: 525.0
+  cx: 319.5
+  cy: 239.5
+  width: 640
+  height: 480
+  depth_scale: 0.001
+  aligned_to: "rgb"
+  distortion: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+rgb_stereo:
+  enabled: false
+
+thermal:
+  enabled: false
+
+extrinsics:
+  rgb_to_base:  { x: 0.15, y: 0.0, z: 0.85, qx: 0.0, qy: 0.0, qz: 0.0, qw: 1.0 }
+  depth_to_base: { x: 0.15, y: 0.0, z: 0.85, qx: 0.0, qy: 0.0, qz: 0.0, qw: 1.0 }

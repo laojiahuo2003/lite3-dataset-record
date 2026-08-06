@@ -34,6 +34,72 @@ DEFAULT_SCENE_URL = "http://127.0.0.1:50107/api/state"
 DEFAULT_MAPPING_URL = "http://127.0.0.1:8091"
 DEFAULT_MAPS_DIR = Path.home() / ".robonix" / "maps"
 
+# ── YOLO class → (category, label_zh) mapping ──────────────────────────
+_CATEGORY_MAP = {
+    "fire_extinguisher":   ("safety_equipment", "灭火器"),
+    "exit_sign":           ("safety_equipment", "安全出口标识"),
+    "potted_plant":        ("plant", "盆栽绿植"),
+    "plant":               ("plant", "绿植"),
+    "chair":               ("furniture", "椅子"),
+    "table":               ("furniture", "桌子"),
+    "desk":                ("furniture", "办公桌"),
+    "cabinet":             ("furniture", "柜子"),
+    "shelf":               ("furniture", "架子"),
+    "couch":               ("furniture", "沙发"),
+    "monitor":             ("it_equipment", "显示器"),
+    "keyboard":            ("it_equipment", "键盘"),
+    "laptop":              ("it_equipment", "笔记本电脑"),
+    "mouse":               ("it_equipment", "鼠标"),
+    "server_rack":         ("it_equipment", "服务器机柜"),
+    "water_dispenser":     ("appliance", "饮水机"),
+    "coffee_machine":      ("appliance", "咖啡机"),
+    "refrigerator":        ("appliance", "冰箱"),
+    "water_bottle":        ("container", "水瓶"),
+    "mug":                 ("container", "杯子"),
+    "cup":                 ("container", "杯子"),
+    "box":                 ("container", "盒子"),
+    "cardboard_box":       ("container", "纸箱"),
+    "thermos":             ("container", "保温杯"),
+    "handbag":             ("personal_item", "手提包"),
+    "backpack":            ("personal_item", "背包"),
+    "lamp":                ("fixture", "台灯"),
+    "light":               ("fixture", "灯"),
+    "clock":               ("fixture", "钟"),
+    "picture_frame":       ("decoration", "相框"),
+    "vase":                ("decoration", "花瓶"),
+    "whiteboard":          ("office_supply", "白板"),
+    "trash_can":           ("fixture", "垃圾桶"),
+    "door":                ("fixture", "门"),
+    "window":              ("fixture", "窗户"),
+    "microwave":           ("appliance", "微波炉"),
+    "phone":               ("personal_item", "手机"),
+    "cell_phone":          ("personal_item", "手机"),
+    "book":                ("office_supply", "书本"),
+    "bottle":              ("container", "瓶子"),
+    "person":              ("human", "人"),
+    "robot":               ("robot", "机器人"),
+    "car":                 ("vehicle", "汽车"),
+    "bicycle":             ("vehicle", "自行车"),
+    "tv":                  ("it_equipment", "电视"),
+    "remote":              ("it_equipment", "遥控器"),
+    "camera":              ("it_equipment", "相机"),
+    "backpack":            ("personal_item", "背包"),
+    "bag":                 ("personal_item", "包"),
+    "umbrella":            ("personal_item", "雨伞"),
+    "sink":                ("fixture", "水槽"),
+    "toilet":              ("fixture", "马桶"),
+    "bed":                 ("furniture", "床"),
+    "pillow":              ("furniture", "枕头"),
+    "bench":               ("furniture", "长凳"),
+    "suitcase":            ("personal_item", "行李箱"),
+    "shoe":                ("personal_item", "鞋子"),
+}
+
+
+def _lookup_category(cls_name: str) -> tuple:
+    """Map YOLO class name → (category, label_zh)."""
+    return _CATEGORY_MAP.get(cls_name.lower(), ("", cls_name))
+
 
 def _get_json(url: str, timeout: float = 8.0):
     """GET 一个 JSON 接口，失败返回 None（服务没起来时不阻塞）。"""
@@ -70,7 +136,7 @@ def _room_of(x: float, y: float, rooms: list) -> str:
 
 
 def build_objects_gt(state: dict, session_id: str, min_conf: float) -> dict:
-    """从 scene 状态抽出物体标注。"""
+    """从 scene 状态抽出物体标注，对齐改版 objects.yaml schema."""
     rooms = [a for a in state.get("annotations", []) if a.get("kind") == "room"]
     objects = []
     skipped = 0
@@ -83,21 +149,36 @@ def build_objects_gt(state: dict, session_id: str, min_conf: float) -> dict:
             continue
         pose = obj.get("pose", {})
         bbox = obj.get("bbox", {})
+        cls_name = obj.get("cls", "unknown")
+        short_id = obj.get("short_id") or obj.get("id", "")
+        category, label_zh = _lookup_category(cls_name)
+
         objects.append({
-            "id": obj.get("short_id") or obj.get("id"),
-            "class": obj.get("cls"),
-            "location": _room_of(pose.get("x", 0.0), pose.get("y", 0.0), rooms),
-            "pose": {k: round(float(pose.get(k, 0.0)), 4) for k in ("x", "y", "z", "yaw")},
-            "size": {
-                "x": round(float(bbox.get("size_x", 0.0)), 4),
-                "y": round(float(bbox.get("size_y", 0.0)), 4),
-                "z": round(float(bbox.get("size_z", 0.0)), 4),
+            "obj_id": f"scene.object.{cls_name}_{short_id.split('_')[-1] if '_' in short_id else short_id}",
+            "label_zh": label_zh,                   # auto-mapped from category table
+            "label_en": cls_name,
+            "category": category,                    # auto-mapped from category table
+            "position": {
+                "x": round(float(pose.get("x", 0.0)), 4),
+                "y": round(float(pose.get("y", 0.0)), 4),
+                "z": round(float(pose.get("z", 0.0)), 4),
+            },
+            "bbox_3d": {
+                "dx": round(float(bbox.get("size_x", 0.0)), 4),
+                "dy": round(float(bbox.get("size_y", 0.0)), 4),
+                "dz": round(float(bbox.get("size_z", 0.0)), 4),
+            },
+            "first_seen_ts": 0,
+            "last_seen_ts": 0,
+            "attributes": {
+                "status": "missing" if bool(obj.get("missing", False)) else "normal",
+                "state_detail": "",
             },
             "confidence": round(conf, 4),
             "observation_count": int(obj.get("observation_count", 0)),
-            "missing": bool(obj.get("missing", False)),
+            "location": _room_of(pose.get("x", 0.0), pose.get("y", 0.0), rooms),
         })
-    objects.sort(key=lambda o: (o["location"], o["class"], o["id"]))
+    objects.sort(key=lambda o: (o["location"], o["category"], o["label_en"]))
     return {
         "session_id": session_id,
         "captured_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -110,20 +191,74 @@ def build_objects_gt(state: dict, session_id: str, min_conf: float) -> dict:
     }
 
 
+def _infer_region_type(name_zh: str) -> str:
+    """Derive region type from Chinese room name."""
+    type_hints = {
+        "办公": "indoor_office", "会议": "meeting_room", "茶水": "kitchen",
+        "走廊": "corridor", "走道": "corridor", "过道": "corridor",
+        "大厅": "entrance", "入口": "entrance", "前台": "entrance",
+        "实验": "lab", "机": "server_room", "仓库": "storage",
+        "存储": "storage", "卫生": "restroom", "出口": "exit",
+        "户外": "outdoor", "室外": "outdoor", "门": "entrance",
+    }
+    for keyword, rt in type_hints.items():
+        if keyword in name_zh:
+            return rt
+    return ""
+
+
 def build_scene_def(state: dict, maps_dir: Path) -> dict:
-    """从 scene 状态 + 地图元信息构建场景定义。"""
+    """从 scene 状态 + 地图元信息构建改版场景定义."""
     binding = state.get("map_binding") or {}
     map_id = binding.get("map_id", "")
-    rooms = [
-        {"name": a.get("name"), "kind": a.get("kind"), "points": a.get("points")}
-        for a in state.get("annotations", [])
+    raw_rooms = [
+        a for a in state.get("annotations", [])
         if a.get("kind") == "room"
     ]
+
+    # Build regions list with auto-computed bounds
+    regions = []
+    for i, room in enumerate(raw_rooms):
+        pts = room.get("points", [])
+        xs = [p[0] for p in pts] if pts else [0, 0]
+        ys = [p[1] for p in pts] if pts else [0, 0]
+        # Compute area via shoelace formula
+        area = 0.0
+        if len(pts) >= 3:
+            for j in range(len(pts)):
+                x1, y1 = pts[j][0], pts[j][1]
+                x2, y2 = pts[(j + 1) % len(pts)][0], pts[(j + 1) % len(pts)][1]
+                area += x1 * y2 - x2 * y1
+            area = abs(area) / 2.0
+
+        name_zh = room.get("name", f"区域{i + 1}")
+
+        regions.append({
+            "region_id": f"region_{i + 1}",
+            "name_zh": name_zh,
+            "name_en": f"Region {i + 1}",
+            "type": _infer_region_type(name_zh),
+            "area_m2": round(area, 2),
+            "bounds": {
+                "x_min": round(min(xs), 2),
+                "x_max": round(max(xs), 2),
+                "y_min": round(min(ys), 2),
+                "y_max": round(max(ys), 2),
+            },
+            "adjacency": [],                          # needs manual fill
+            "points": pts,
+        })
+
     scene = {
+        "scene_id": "scenes1",
+        "scene_name_zh": map_id or "未命名场景",      # default from map_id
+        "scene_name_en": map_id or "Unnamed Scene",
+        "total_area_m2": round(sum(r["area_m2"] for r in regions), 2),
         "map_id": map_id,
         "captured_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "robot_pose": state.get("robot"),
-        "rooms": rooms,
+        "regions": regions,
+        "patrol_routes": [],                          # needs manual fill
     }
     meta_path = maps_dir / map_id / "meta.yaml"
     if meta_path.exists():
@@ -180,6 +315,7 @@ def main() -> int:
     ap.add_argument("--maps-dir", default=str(DEFAULT_MAPS_DIR))
     ap.add_argument("--min-conf", type=float, default=0.0, help="物体置信度下限，默认 0")
     ap.add_argument("--project-dir", default=str(PROJECT_DIR))
+    ap.add_argument("--scene", default="scenes1", help="场景目录名 (默认 scenes1)")
     args = ap.parse_args()
 
     session_id = args.session.zfill(3) if args.session.isdigit() else args.session
@@ -193,16 +329,17 @@ def main() -> int:
         return 1
 
     objects_gt = build_objects_gt(state, session_id, args.min_conf)
-    obj_path = project / "datasets" / f"session_{session_id}" / "objects.yaml"
+    scene_name = args.scene
+    obj_path = project / "datasets" / scene_name / f"session_{session_id}" / "objects.yaml"
     _dump_yaml(obj_path, objects_gt)
     print(f"✓ 物体标注 {objects_gt['object_count']} 个 → {obj_path}")
 
     # 一张地图一个目录，多个 session 共享
     scene_def = build_scene_def(state, maps_dir)
     map_id = scene_def["map_id"] or "unknown_map"
-    scene_dir = project / "datasets" / "scenes" / map_id
+    scene_dir = project / "datasets" / scene_name / map_id
     _dump_yaml(scene_dir / "scene.yaml", scene_def)
-    print(f"✓ 场景定义（{len(scene_def['rooms'])} 房间）→ {scene_dir / 'scene.yaml'}")
+    print(f"✓ 场景定义（{len(scene_def['regions'])} 房间）→ {scene_dir / 'scene.yaml'}")
 
     if copy_layout(map_id, maps_dir, scene_dir):
         print(f"✓ 平面图 → {scene_dir / 'layout.png'}")

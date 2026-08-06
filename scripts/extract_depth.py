@@ -97,7 +97,7 @@ def extract_depth(bag_dir: str, output_dir: str) -> int:
 
     with open(index_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["frame_index", "timestamp_ns", "filename", "width", "height", "encoding"])
+        writer.writerow(["frame_id", "ts", "file_path", "aligned_to_rgb_frame"])
 
         while reader.has_next():
             topic_name, msg_data, timestamp = reader.read_next()
@@ -132,8 +132,8 @@ def extract_depth(bag_dir: str, output_dir: str) -> int:
             cv2.imwrite(filepath, arr_mm)
 
             writer.writerow([
-                count, timestamp, filename,
-                depth_msg.width, depth_msg.height, depth_msg.encoding,
+                count, timestamp, f"depth/{filename}",
+                "",  # aligned_to_rgb_frame: filled by assemble later
             ])
             count += 1
 

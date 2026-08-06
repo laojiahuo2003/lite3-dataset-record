@@ -70,7 +70,9 @@ def extract_images(bag_dir: str, output_dir: str) -> int:
 
     with open(index_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["frame_index", "timestamp_ns", "filename", "width", "height", "encoding"])
+        writer.writerow(["frame_id", "ts", "file_path",
+                         "cam_x", "cam_y", "cam_z",
+                         "cam_qx", "cam_qy", "cam_qz", "cam_qw"])
 
         while reader.has_next():
             topic_name, msg_data, timestamp = reader.read_next()
@@ -93,8 +95,8 @@ def extract_images(bag_dir: str, output_dir: str) -> int:
             cv2.imwrite(filepath, cv2.cvtColor(arr, cv2.COLOR_RGB2BGR) if arr.ndim == 3 and arr.shape[2] == 3 else arr)
 
             writer.writerow([
-                count, timestamp, filename,
-                img_msg.width, img_msg.height, img_msg.encoding,
+                count, timestamp, f"images/{filename}",
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,  # camera pose: filled by assemble later
             ])
             count += 1
 

@@ -19,6 +19,11 @@ RAW_DIR="$PROJECT_DIR/raw"
 SESSION_NUM="${1:-}"
 NOTES="${2:-}"
 
+# Memory service graph location (configured via MEMGRAPH_KEEP_DATA=1 in
+# robonix_manifest.yaml so the graph survives across reboots).
+MEMORY_GRAPH="${MEMORY_GRAPH:-/home/dog/code/test/robonix/services/memory/memory/graph_store.json}"
+MEMORY_IMAGES="${MEMORY_IMAGES:-/home/dog/code/test/robonix/services/memory/data/images}"
+
 # ---------------------------------------------------------------------------
 # 自动检测下一个 session 编号
 # ---------------------------------------------------------------------------
@@ -92,8 +97,18 @@ ros2 bag record -o "$SESSION_DIR" "${TOPICS[@]}"
 cat > "$SESSION_DIR/meta.yaml" << EOF
 session_id: "$SESSION_NUM"
 timestamp: "$(date '+%Y-%m-%d %H:%M:%S')"
-lighting: daylight          # daylight / artificial / night
-notes: "${NOTES:-}"
+lighting_condition: daylight          # daylight / artificial / night
+lux_range: ""                         # optional: measured illuminance range
+temperature_c: ""                     # optional: ambient temperature
+humidity_pct: ""                      # optional: relative humidity
+map_id: ""                            # filled by snapshot_ground_truth.py
+sensor_configs:
+  camera: {model: "Orbbec Gemini 330", resolution: "640x480", fps: 15}
+  lidar: {model: "Livox MID-360", range_m: 40}
+  imu: {model: "Built-in IMU", rate_hz: 100}
+  odometry: {source: "chassis", rate_hz: 20}
+  video: {enabled: true, codec: "h264", resolution: "640x480", fps: 15.0, sample_fps: 1.0}
+operator_notes: "${NOTES:-}"
 EOF
 
 echo ""
@@ -109,3 +124,26 @@ echo "抓取 Ground Truth 快照（scene 物体 + 场景定义）..."
 python3 "$PROJECT_DIR/scripts/snapshot_ground_truth.py" "$SESSION_NUM" \
     || echo "  ⚠ GT 快照未生成（scene/mapping 服务可能未运行），可稍后手动补跑:
       python3 scripts/snapshot_ground_truth.py $SESSION_NUM"
+
+# ---------------------------------------------------------------------------
+# 拷贝 memory service 的 graph_store.json 和图片到 raw session 目录
+# 这些是巡检过程中 memory service 自动记录的记忆节点，后续由
+# convert_memory_nodes.py 转换为目标 schema
+# ---------------------------------------------------------------------------
+echo ""
+echo "拷贝 memory service 数据..."
+if [ -f "$MEMORY_GRAPH" ]; then
+    mkdir -p "$SESSION_DIR/memory"
+    cp "$MEMORY_GRAPH" "$SESSION_DIR/memory/graph_store.json"
+    echo "✓ graph_store.json → $SESSION_DIR/memory/graph_store.json"
+else
+    echo "  ⚠ 未找到 graph_store.json ($MEMORY_GRAPH)，跳过"
+fi
+if [ -d "$MEMORY_IMAGES" ]; then
+    mkdir -p "$SESSION_DIR/memory/images"
+    cp -r "$MEMORY_IMAGES"/* "$SESSION_DIR/memory/images/" 2>/dev/null || true
+    img_count=$(find "$SESSION_DIR/memory/images" -type f 2>/dev/null | wc -l)
+    echo "✓ memory images ($img_count 文件) → $SESSION_DIR/memory/images/"
+else
+    echo "  ⓘ 未找到 memory images 目录，跳过"
+fi

@@ -8,12 +8,35 @@
 """
 
 import csv
+import math
 import os
 import sys
 
 from rosbag2_py import SequentialReader, StorageOptions, ConverterOptions
 from rclpy.serialization import deserialize_message
 from tf2_msgs.msg import TFMessage
+
+
+def _quat_to_euler(rx: float, ry: float, rz: float, rw: float) -> tuple[float, float, float]:
+    """Convert quaternion to roll, pitch, yaw (intrinsic ZYX / Tait-Bryan)."""
+    # roll (x-axis rotation)
+    sinr_cosp = 2.0 * (rw * rx + ry * rz)
+    cosr_cosp = 1.0 - 2.0 * (rx * rx + ry * ry)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+
+    # pitch (y-axis rotation)
+    sinp = 2.0 * (rw * ry - rz * rx)
+    if abs(sinp) >= 1.0:
+        pitch = math.copysign(math.pi / 2.0, sinp)
+    else:
+        pitch = math.asin(sinp)
+
+    # yaw (z-axis rotation)
+    siny_cosp = 2.0 * (rw * rz + rx * ry)
+    cosy_cosp = 1.0 - 2.0 * (ry * ry + rz * rz)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+
+    return roll, pitch, yaw
 
 
 def extract_tf(bag_dir: str, output_dir: str) -> dict:
@@ -44,16 +67,13 @@ def extract_tf(bag_dir: str, output_dir: str) -> dict:
 
         writer_all = csv.writer(f_all)
         writer_all.writerow([
-            "timestamp_ns", "topic",
-            "child_frame_id", "frame_id",
-            "tx", "ty", "tz", "rx", "ry", "rz", "rw",
+            "t",
+            "parent_frame", "child_frame",
+            "tx", "ty", "tz", "qx", "qy", "qz", "qw",
         ])
 
         writer_traj = csv.writer(f_traj)
-        writer_traj.writerow([
-            "timestamp_ns", "frame_id",
-            "tx", "ty", "tz", "rx", "ry", "rz", "rw",
-        ])
+        writer_traj.writerow(["t", "x", "y", "z", "roll", "pitch", "yaw"])
 
         while reader.has_next():
             topic_name, msg_data, timestamp = reader.read_next()
@@ -64,8 +84,8 @@ def extract_tf(bag_dir: str, output_dir: str) -> dict:
 
             for transform in tf_msg.transforms:
                 writer_all.writerow([
-                    timestamp, topic_name,
-                    transform.child_frame_id, transform.header.frame_id,
+                    timestamp,
+                    transform.header.frame_id, transform.child_frame_id,
                     transform.transform.translation.x,
                     transform.transform.translation.y,
                     transform.transform.translation.z,
@@ -75,17 +95,20 @@ def extract_tf(bag_dir: str, output_dir: str) -> dict:
                     transform.transform.rotation.w,
                 ])
 
-                # 提取 base_link 轨迹
+                # 提取 base_link 轨迹（欧拉角格式）
                 if transform.child_frame_id == "base_link":
-                    writer_traj.writerow([
-                        timestamp, transform.header.frame_id,
-                        transform.transform.translation.x,
-                        transform.transform.translation.y,
-                        transform.transform.translation.z,
+                    roll, pitch, yaw = _quat_to_euler(
                         transform.transform.rotation.x,
                         transform.transform.rotation.y,
                         transform.transform.rotation.z,
                         transform.transform.rotation.w,
+                    )
+                    writer_traj.writerow([
+                        timestamp,
+                        transform.transform.translation.x,
+                        transform.transform.translation.y,
+                        transform.transform.translation.z,
+                        roll, pitch, yaw,
                     ])
 
             counts[topic_name] += 1

@@ -1,0 +1,18 @@
+# Key events during this patrol session.
+# Manually annotated — add anomalies, object changes, and human presence events.
+#
+# Event types: anomaly | object_change | human_presence
+# Severity:   info | warning | critical
+#
+# Example:
+# events:
+#   - event_id: "EV001"
+#     ts: 1785483465510171103
+#     type: "object_change"
+#     severity: "info"
+#     description_zh: "灭火器从(3.2,0.5)移到(3.8,0.3)"
+#     description_en: "Fire extinguisher moved from (3.2,0.5) to (3.8,0.3)"
+#     related_obj_ids: ["scene.object.fire_ext_001"]
+#     related_node_ids: [12]
+
+events: []
