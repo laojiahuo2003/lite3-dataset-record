@@ -9,13 +9,15 @@
   output_dir/depth_index.csv
 
 输出:
-  output_dir/videos/rgb_main.mp4       H.264 编码 RGB 视频
-  output_dir/videos/depth_aligned.mp4  H.264 编码深度视频 (uint16 双通道 BGR 打包)
-  output_dir/videos_index.csv          视频流索引
+  output_dir/videos/rgb_main.mp4         H.264 编码 RGB 视频
+  output_dir/videos/depth_aligned.mkv    FFV1 无损深度视频 (uint16 双通道 BGR 打包)
+  output_dir/videos/depth_preview.mp4    H.264 深度热力图预览 (Turbo 色板, 给人看)
+  output_dir/videos_index.csv            视频流索引
 
 用法:
   python3 scripts/build_videos.py datasets/scenes1/session_001
   python3 scripts/build_videos.py datasets/scenes1/session_001 --no-depth
+  python3 scripts/build_videos.py datasets/scenes1/session_001 --no-preview
 """
 
 import argparse
@@ -282,12 +284,137 @@ def build_depth_video(
     }
 
 
+def build_depth_preview_video(
+    depth_dir: str,
+    depth_index: list[dict],
+    output_video: str,
+    fps: float = 15.0,
+    vmin_mm: int | None = None,
+    vmax_mm: int | None = None,
+) -> dict | None:
+    """
+    将深度帧序列渲染为 Turbo 热力图 H.264 预览视频（仅供人类观看）。
+
+    深度值自动归一化到 0-255 后应用 COLORMAP_TURBO，
+    输出标准 H.264 MP4，任何播放器都能直接播放。
+
+    Args:
+        vmin_mm: 深度最小值 (mm)，None 则自动从第一帧统计
+        vmax_mm: 深度最大值 (mm)，None 则自动从第一帧统计
+    """
+    if not depth_index:
+        print("  ⚠ 无深度帧，跳过预览视频编码")
+        return None
+
+    width, height = _get_resolution(depth_index, depth_dir)
+
+    # H.264 编码器
+    fourcc = cv2.VideoWriter_fourcc(*"avc1")
+    if fourcc == 0:
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+
+    os.makedirs(os.path.dirname(output_video), exist_ok=True)
+
+    writer = cv2.VideoWriter(output_video, fourcc, fps, (width, height))
+    if not writer.isOpened():
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(output_video, fourcc, fps, (width, height))
+    if not writer.isOpened():
+        print("  ✗ 无法创建预览视频编码器（缺少 codec）", file=sys.stderr)
+        return None
+
+    session_dir = os.path.dirname(depth_dir)
+
+    # 第一遍：统计深度范围（如果未指定）
+    if vmin_mm is None or vmax_mm is None:
+        _vmin = 65535
+        _vmax = 0
+        for row in depth_index:
+            file_path = os.path.join(session_dir, row["file_path"])
+            img = cv2.imread(file_path, cv2.IMREAD_UNCHANGED)
+            if img is None:
+                continue
+            if img.ndim == 3:
+                img = img[:, :, 0]
+            _vmin = min(_vmin, int(img.min()))
+            _vmax = max(_vmax, int(img.max()))
+        vmin_mm = _vmin
+        vmax_mm = _vmax
+        print(f"  深度范围: {vmin_mm} ~ {vmax_mm} mm")
+
+    count = 0
+    start_ts = None
+    end_ts = None
+    start_frame = None
+    end_frame = None
+
+    for row in depth_index:
+        file_path = os.path.join(session_dir, row["file_path"])
+        if not os.path.exists(file_path):
+            continue
+
+        img = cv2.imread(file_path, cv2.IMREAD_UNCHANGED)
+        if img is None:
+            continue
+        if img.ndim == 3:
+            img = img[:, :, 0]
+
+        # 归一化到 0-255
+        normalized = np.clip(
+            (img.astype(np.float32) - vmin_mm) / max(vmax_mm - vmin_mm, 1) * 255.0,
+            0, 255,
+        ).astype(np.uint8)
+
+        # 应用 Turbo 色板
+        colored = cv2.applyColorMap(normalized, cv2.COLORMAP_TURBO)
+
+        ts = int(float(row["ts"]))
+        frame_id = int(row["frame_id"])
+
+        if start_ts is None:
+            start_ts = ts
+            start_frame = frame_id
+        end_ts = ts
+        end_frame = frame_id
+
+        writer.write(colored)
+        count += 1
+
+        if count % 200 == 0:
+            print(f"  深度预览: 已编码 {count} 帧...")
+
+    writer.release()
+
+    if count == 0:
+        print("  ✗ 未能编码任何深度预览帧", file=sys.stderr)
+        return None
+
+    duration = (end_ts - start_ts) / 1e9 if start_ts and end_ts else 0
+
+    print(f"✓ 深度预览: {count} 帧 (Turbo 热力图), {duration:.1f}s → {output_video}")
+
+    return {
+        "video_id": "",
+        "file_path": os.path.relpath(output_video, session_dir),
+        "camera_type": "depth_preview",
+        "codec": "h264",
+        "resolution": f"{width}×{height}",
+        "fps": fps,
+        "duration_sec": round(duration, 1),
+        "start_ts": start_ts or 0,
+        "end_ts": end_ts or 0,
+        "start_frame_id": start_frame or 0,
+        "end_frame_id": end_frame or 0,
+        "count": count,
+    }
+
+
 def write_videos_index(output_dir: str, entries: list[dict], session_id: str) -> None:
     """写入 videos_index.csv（附录 H 格式）。"""
     index_path = os.path.join(output_dir, "videos_index.csv")
 
     # 给每个 entry 赋 video_id，file_path 已在上游填充为相对路径
-    camera_suffix = {"rgb": "main", "depth": "aligned", "thermal": "thermal"}
+    camera_suffix = {"rgb": "main", "depth": "aligned", "thermal": "thermal", "depth_preview": "preview"}
     for e in entries:
         if not e:
             continue
@@ -351,8 +478,9 @@ def main():
     parser = argparse.ArgumentParser(description="从图像帧序列编码视频流")
     parser.add_argument("output_dir", help="session 输出目录")
     parser.add_argument("--fps", type=float, default=15.0, help="视频帧率 (默认 15)")
-    parser.add_argument("--no-depth", action="store_true", help="跳过深度视频编码")
+    parser.add_argument("--no-depth", action="store_true", help="跳过深度视频编码（含预览）")
     parser.add_argument("--no-rgb", action="store_true", help="跳过 RGB 视频编码")
+    parser.add_argument("--no-preview", action="store_true", help="跳过深度热力图预览视频")
     args = parser.parse_args()
 
     output_dir = os.path.abspath(args.output_dir)
@@ -386,7 +514,7 @@ def main():
         )
         entries.append(entry)
 
-    # 深度视频
+    # 深度视频（无损）
     if not args.no_depth and depth_index:
         depth_video_path = os.path.join(videos_dir, "depth_aligned.mp4")
         entry = build_depth_video(
@@ -396,6 +524,17 @@ def main():
             fps=args.fps,
         )
         entries.append(entry)
+
+    # 深度热力图预览视频（给人看，独立于 --no-depth）
+    if not args.no_preview and depth_index:
+        preview_video_path = os.path.join(videos_dir, "depth_preview.mp4")
+        preview_entry = build_depth_preview_video(
+            os.path.join(output_dir, "depth"),
+            depth_index,
+            preview_video_path,
+            fps=args.fps,
+        )
+        entries.append(preview_entry)
 
     # 写索引 & 更新 meta
     valid = [e for e in entries if e]

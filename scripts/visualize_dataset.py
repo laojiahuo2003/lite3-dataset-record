@@ -101,14 +101,26 @@ def _compose_map_trajectory(output_dir: str) -> list[dict]:
 
     # 分开两层 TF，按时间排序
     # tf_trajectory.csv: t, topic, child_frame_id, parent_frame_id, tx, ty, tz, qx, qy, qz, qw
+    # 优先匹配 map→odom（动态定位），若没有则回退到 map→odom_icp（某些 session 只发布 ICP 帧）
     map_odom = sorted(
         [(int(r["t"]), float(r["tx"]), float(r["ty"]), float(r["qz"]), float(r["qw"]))
          for r in rows if r["parent_frame"] == "map" and r["child_frame"] == "odom"],
         key=lambda x: x[0])
+    if not map_odom:
+        map_odom = sorted(
+            [(int(r["t"]), float(r["tx"]), float(r["ty"]), float(r["qz"]), float(r["qw"]))
+             for r in rows if r["parent_frame"] == "map" and r["child_frame"].startswith("odom")],
+            key=lambda x: x[0])
+    # odom→base_link: 同样优先精确匹配，兼容 odom_icp 等变体
     odom_bl = sorted(
         [(int(r["t"]), float(r["tx"]), float(r["ty"]), float(r["qz"]), float(r["qw"]))
          for r in rows if r["parent_frame"] == "odom" and r["child_frame"] == "base_link"],
         key=lambda x: x[0])
+    if not odom_bl:
+        odom_bl = sorted(
+            [(int(r["t"]), float(r["tx"]), float(r["ty"]), float(r["qz"]), float(r["qw"]))
+             for r in rows if r["parent_frame"].startswith("odom") and r["child_frame"] == "base_link"],
+            key=lambda x: x[0])
 
     if not map_odom:
         return []
