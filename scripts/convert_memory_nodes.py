@@ -325,6 +325,7 @@ def convert(
                 "cy": float(rgb_calib.get("cy", 239.5)),
                 "width": int(rgb_calib.get("width", 640)),
                 "height": int(rgb_calib.get("height", 480)),
+                "distortion": [float(x) for x in rgb_calib.get("distortion", [0.0] * 5)],
                 "camera_pose": cp,
                 "depth_scale": float(depth_calib.get("depth_scale", 0.001)),
                 "camera_type": "rgb",

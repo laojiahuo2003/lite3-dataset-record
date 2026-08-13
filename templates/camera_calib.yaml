@@ -1,29 +1,34 @@
 # Camera calibration for session: {{session_id}}
-# Platform: Deep Robotics Lite3 + Orbbec Gemini 330
+# Platform: Deep Robotics Lite3 + Orbbec Gemini 330 (640x480 @ 15fps)
 #
-# NOTE: fx/fy/cx/cy values below are PLACEHOLDERS.
-# To get real values while the camera is running:
-#   ros2 topic echo /camera/color/camera_info --once | grep "^\s*k:"
-# Or check Orbbec SDK docs for Gemini 330 at 640x480 resolution.
+# 内参来源: Orbbec 出厂标定，由 orbbec_camera 驱动发布到
+#   /camera/color/camera_info 与 /camera/depth/camera_info
+# 离线提取方法（assemble_dataset.py 自动执行）:
+#   python3 scripts/extract_calib.py raw/session_XXX datasets/scenes1/session_XXX
+# 手动查看当前值:
+#   ros2 topic echo /camera/color/camera_info --once
+#
+# 外参来源: base_link(TORSO) → camera 光心，采自 /camera/extrinsics 话题（与 URDF 一致），
+#   此处保存为相机 → 基座的逆变换。安装位置固定，各 session 通用。
 
 session_id: "{{session_id}}"
 calib_date: ""
 
 rgb:
-  fx: 525.0
-  fy: 525.0
-  cx: 319.5
-  cy: 239.5
+  fx: 365.9979553222656
+  fy: 365.87420654296875
+  cx: 320.121826171875
+  cy: 240.64369201660156
   width: 640
   height: 480
-  distortion: [0.0, 0.0, 0.0, 0.0, 0.0]
+  distortion: [-0.031580522656440735, 0.03578142076730728, -0.00013807292270939797, 0.00017341224884148687, -0.012569879181683064]
   frame_rate: 15.0
 
 depth:
-  fx: 525.0
-  fy: 525.0
-  cx: 319.5
-  cy: 239.5
+  fx: 365.9979553222656
+  fy: 365.87420654296875
+  cx: 320.121826171875
+  cy: 240.64369201660156
   width: 640
   height: 480
   depth_scale: 0.001
@@ -37,5 +42,5 @@ thermal:
   enabled: false
 
 extrinsics:
-  rgb_to_base:  { x: 0.15, y: 0.0, z: 0.85, qx: 0.0, qy: 0.0, qz: 0.0, qw: 1.0 }
-  depth_to_base: { x: 0.15, y: 0.0, z: 0.85, qx: 0.0, qy: 0.0, qz: 0.0, qw: 1.0 }
+  rgb_to_base:  { x: 0.0325, y: 0.0725, z: -0.2348, qx: 0.5, qy: -0.5, qz: 0.5, qw: 0.5 }
+  depth_to_base: { x: 0.0175, y: 0.0725, z: -0.2348, qx: 0.5, qy: -0.5, qz: 0.5, qw: 0.5 }

@@ -19,6 +19,19 @@ RAW_DIR="$PROJECT_DIR/raw"
 SESSION_NUM="${1:-}"
 NOTES="${2:-}"
 
+# ---------------------------------------------------------------------------
+# ROS 环境：传输必须用 rmw_zenoh_cpp（与 start.sh 一致）。
+# 否则 ros2 bag record 走默认 fastrtps，看不到 zenoh 上的话题，
+# 会录出一个 0 消息的空包（session_XXX_0.db3 只有 ~24K）。
+# ---------------------------------------------------------------------------
+set +u
+# shellcheck disable=SC1091
+source /opt/ros/humble/setup.bash 2>/dev/null || true
+set -u
+export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_zenoh_cpp}"
+# 丢弃可能以其他 RMW 启动的残留 daemon，避免 ros2 CLI 连不上 zenoh 图
+ros2 daemon stop >/dev/null 2>&1 || true
+
 # Memory service graph location (configured via MEMGRAPH_KEEP_DATA=1 in
 # robonix_manifest.yaml so the graph survives across reboots).
 MEMORY_GRAPH="${MEMORY_GRAPH:-/home/dog/code/test/robonix/services/memory/memory/graph_store.json}"
@@ -52,8 +65,14 @@ TOPICS=(
     # --- RGB 图像 ---
     /camera/color/image_raw
 
+    # --- RGB 相机内参（出厂标定，保证离线可复现） ---
+    /camera/color/camera_info
+
     # --- 深度图（Orbbec Gemini 330） ---
     /camera/depth/image_raw
+
+    # --- 深度相机内参（已注册到彩色帧） ---
+    /camera/depth/camera_info
 
     # --- 激光雷达点云 ---
     /scanner/cloud

@@ -191,6 +191,7 @@ def build_memory_nodes(
     default_cy = float(rgb_calib.get("cy", 239.5))
     default_width = int(rgb_calib.get("width", 640))
     default_height = int(rgb_calib.get("height", 480))
+    default_distortion = [float(x) for x in rgb_calib.get("distortion", [0.0] * 5)]
     default_depth_scale = float(depth_calib.get("depth_scale", 0.001))
 
     # 下采样：时间间隔 + 空间间隔
@@ -276,6 +277,7 @@ def build_memory_nodes(
             "cy": default_cy,
             "width": default_width,
             "height": default_height,
+            "distortion": default_distortion,
             "camera_pose": cam_pose,
             "depth_scale": default_depth_scale,
             "camera_type": "rgb",

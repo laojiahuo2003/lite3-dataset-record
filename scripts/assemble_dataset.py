@@ -17,7 +17,8 @@ ScribeMem-Bench 数据集构建主控脚本（改版格式）。
   Phase 3: 图像提取    extract_images.py  → images/
   Phase 4: 深度图提取  extract_depth.py   → depth/
   Phase 5: 点云提取    extract_lidar.py   → lidar/
-  Phase 6: 模板拷贝    camera_calib.yaml, events.yaml, videos_index.csv, meta.yaml
+  Phase 6: 相机标定     extract_calib.py → camera_calib.yaml（bag camera_info，缺失回退模板）
+  Phase 6b: 模板拷贝   events.yaml, videos_index.csv, meta.yaml
   Phase 7: 数据增强    enrich_images_csv, enrich_depth_csv
   Phase 8: 视频编码    build_videos.py → videos/
   Phase 9: 记忆节点    convert_memory_nodes.py 或 build_memory_nodes.py
@@ -417,22 +418,25 @@ def _process_one(label: str, bag_dir: str, output_dir: str, args) -> int:
             if rc != 0:
                 exit_code = rc
 
-    # ---- Phase 6: 模板拷贝 ------------------------------------------------
+    # ---- Phase 6: 相机标定提取 --------------------------------------------
+    if "nodes" in modules:
+        # camera_calib.yaml: 优先从 bag 的 camera_info 提取出厂标定内参（离线可复现），
+        # 旧 bag 无 camera_info 时由 extract_calib.py 回退到 templates 里的实测值。
+        calib_yaml = os.path.join(output_dir, "camera_calib.yaml")
+        if not os.path.exists(calib_yaml):
+            rc = run_script("extract_calib.py", [bag_dir, output_dir], "相机标定提取")
+            if rc != 0:
+                exit_code = rc
+
+    # ---- Phase 6b: 模板拷贝 ------------------------------------------------
     if "nodes" in modules:
         templates_dir = os.path.join(os.path.abspath(os.path.join(SCRIPT_DIR, "..")), "templates")
         if os.path.isdir(templates_dir):
-            for tpl_name in ("camera_calib.yaml", "videos_index.csv", "events.yaml"):
+            for tpl_name in ("videos_index.csv", "events.yaml"):
                 tpl_src = os.path.join(templates_dir, tpl_name)
                 tpl_dst = os.path.join(output_dir, tpl_name)
                 if os.path.exists(tpl_src) and not os.path.exists(tpl_dst):
                     shutil.copy2(tpl_src, tpl_dst)
-                    # Replace {{session_id}} placeholder in yaml files
-                    if tpl_name.endswith(".yaml"):
-                        with open(tpl_dst, "r") as f:
-                            content = f.read()
-                        content = content.replace("{{session_id}}", session_id)
-                        with open(tpl_dst, "w") as f:
-                            f.write(content)
                     print(f"  ✓ 模板 → {tpl_dst}")
 
         # 拷贝会话元信息 meta.yaml（从 raw/ 到 datasets/）
