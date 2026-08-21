@@ -334,7 +334,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="构建 ScribeMem-Bench 记忆节点（附录 C）")
-    parser.add_argument("--output-dir", default="datasets/scenes1/session_001", help="提取数据的输出目录")
+    parser.add_argument("--output-dir", default="datasets/map_f1/session_001", help="提取数据的输出目录")
     parser.add_argument("--bag-dir", default="raw/session_001", help="rosbag2 目录（保留兼容，不再使用）")
     parser.add_argument("--sample-interval", type=float, default=2.0, help="时间采样间隔(秒)")
     parser.add_argument("--sample-distance", type=float, default=0.5, help="空间采样间隔(米)")

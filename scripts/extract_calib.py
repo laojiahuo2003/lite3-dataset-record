@@ -9,7 +9,7 @@
 同时估算实际采集帧率（从 camera_info 消息时间戳中位数得出）。
 
 用法:
-  python3 scripts/extract_calib.py raw/session_001 datasets/scenes1/session_001
+  python3 scripts/extract_calib.py raw/session_001 datasets/map_f1/session_001
   python3 scripts/extract_calib.py <bag_dir> <output_dir>
 """
 
@@ -157,6 +157,6 @@ def extract_calib(bag_dir: str, output_dir: str) -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="从 rosbag2 提取相机内参生成 camera_calib.yaml")
     parser.add_argument("bag_dir", nargs="?", default="raw/session_001")
-    parser.add_argument("output_dir", nargs="?", default="datasets/scenes1/session_001")
+    parser.add_argument("output_dir", nargs="?", default="datasets/map_f1/session_001")
     args = parser.parse_args()
     sys.exit(extract_calib(args.bag_dir, args.output_dir))

@@ -30,12 +30,12 @@ Mapping of key fields:
 Usage:
   python3 scripts/convert_memory_nodes.py \
     --graph raw/session_001/memory/graph_store.json \
-    --calib datasets/scenes1/session_001/camera_calib.yaml \
-    --images-csv datasets/scenes1/session_001/images_index.csv \
-    --depth-csv datasets/scenes1/session_001/depth_index.csv \
-    --odom-csv datasets/scenes1/session_001/odometry.csv \
+    --calib datasets/map_test2/session_001/camera_calib.yaml \
+    --images-csv datasets/map_test2/session_001/images_index.csv \
+    --depth-csv datasets/map_test2/session_001/depth_index.csv \
+    --odom-csv datasets/map_test2/session_001/odometry.csv \
     --session-id session_001 \
-    --output datasets/scenes1/session_001/memory_nodes.json
+    --output datasets/map_test2/session_001/memory_nodes.json
 """
 
 import argparse

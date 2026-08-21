@@ -171,7 +171,7 @@ def enrich_depth_csv(output_dir: str) -> None:
 
 # ── Manifest 生成 ─────────────────────────────────────────────────────────
 
-def generate_manifest(output_dir: str, scene_id: str, session_id: str) -> None:
+def generate_manifest(output_dir: str, map_id: str, session_id: str) -> None:
     """生成 dataset_manifest.yaml（附录 G 格式）。"""
     try:
         import yaml as _yaml
@@ -244,7 +244,7 @@ def generate_manifest(output_dir: str, scene_id: str, session_id: str) -> None:
             pass
 
     manifest = {
-        "scene_id": scene_id,
+        "map_id": map_id,
         "session_id": session_id,
         "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "time_of_day": time_of_day,
@@ -284,8 +284,8 @@ def main():
   # 跳过已存在（增量模式）
   python3 scripts/assemble_dataset.py --skip-existing
 
-  # 指定场景目录
-  python3 scripts/assemble_dataset.py -s 001 --scene scenes2
+  # 手动指定地图
+  python3 scripts/assemble_dataset.py -s 001 --map map_f1
         """,
     )
     parser.add_argument("-s", "--session", help="指定 session 编号（如 001），不指定则处理全部")
@@ -295,54 +295,101 @@ def main():
     parser.add_argument("--only", help="仅运行指定模块 (逗号分隔: odom,tf,images,depth,lidar,nodes)")
     parser.add_argument("--sample-interval", type=float, default=2.0, help="记忆节点时间采样间隔(秒)")
     parser.add_argument("--sample-distance", type=float, default=0.5, help="记忆节点空间采样间隔(米)")
-    parser.add_argument("--scene", default="scenes1", help="场景目录名 (默认 scenes1)")
+    parser.add_argument("--map", default="", help="手动指定地图目录名（如 map_f1），留空则从 raw/session_xxx/meta.yaml 读取")
     args = parser.parse_args()
 
     project_dir = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
     raw_dir = os.path.join(project_dir, "raw")
-    datasets_dir = os.path.join(project_dir, "datasets", args.scene)
+    datasets_dir = os.path.join(project_dir, "datasets")
 
     # 收集要处理的 session
-    sessions = []  # list of (label, bag_dir, output_dir)
+    sessions = []  # list of (label, bag_dir, output_dir, map_id)
     if args.bag_dir:
-        out = args.output or os.path.join(datasets_dir, os.path.basename(args.bag_dir))
-        sessions.append((os.path.basename(args.bag_dir), args.bag_dir, out))
+        # 手动指定 bag_dir 时，需要从 meta.yaml 读取 map_id
+        map_id = args.map
+        if not map_id:
+            meta_path = os.path.join(args.bag_dir, "meta.yaml")
+            if os.path.exists(meta_path):
+                try:
+                    import yaml as _yaml
+                    with open(meta_path) as f:
+                        meta = _yaml.safe_load(f)
+                    map_id = meta.get("map_id", "unknown")
+                except Exception:
+                    map_id = "unknown"
+            else:
+                map_id = "unknown"
+        out = args.output or os.path.join(datasets_dir, map_id, os.path.basename(args.bag_dir))
+        sessions.append((os.path.basename(args.bag_dir), args.bag_dir, out, map_id))
     elif args.session:
         sid = args.session.zfill(3) if args.session.isdigit() else args.session
-        sessions.append((f"session_{sid}", os.path.join(raw_dir, f"session_{sid}"),
-                         os.path.join(datasets_dir, f"session_{sid}")))
+        bag_dir = os.path.join(raw_dir, f"session_{sid}")
+
+        # 从 meta.yaml 读取 map_id
+        map_id = args.map
+        if not map_id:
+            meta_path = os.path.join(bag_dir, "meta.yaml")
+            if os.path.exists(meta_path):
+                try:
+                    import yaml as _yaml
+                    with open(meta_path) as f:
+                        meta = _yaml.safe_load(f)
+                    map_id = meta.get("map_id", "unknown")
+                except Exception:
+                    map_id = "unknown"
+            else:
+                map_id = "unknown"
+
+        sessions.append((f"session_{sid}", bag_dir, os.path.join(datasets_dir, map_id, f"session_{sid}"), map_id))
     else:
+        # 处理所有 session
         raw_globs = sorted(glob.glob(os.path.join(raw_dir, "session_*")))
         for sp in raw_globs:
             sid = os.path.basename(sp)
-            if os.path.isdir(sp):
-                sessions.append((sid, sp, os.path.join(datasets_dir, sid)))
+            if not os.path.isdir(sp):
+                continue
+
+            # 从 meta.yaml 读取 map_id
+            map_id = args.map
+            if not map_id:
+                meta_path = os.path.join(sp, "meta.yaml")
+                if os.path.exists(meta_path):
+                    try:
+                        import yaml as _yaml
+                        with open(meta_path) as f:
+                            meta = _yaml.safe_load(f)
+                        map_id = meta.get("map_id", "unknown")
+                    except Exception:
+                        map_id = "unknown"
+                else:
+                    map_id = "unknown"
+
+            sessions.append((sid, sp, os.path.join(datasets_dir, map_id, sid), map_id))
+
         if not sessions:
             print(f"错误: 未找到任何 session 目录 (raw/session_*)，请先录制", file=sys.stderr)
             return 1
 
-    print(f"场景: {args.scene}")
-    print(f"发现 {len(sessions)} 个 session: {', '.join(s[0] for s in sessions)}")
+    print(f"发现 {len(sessions)} 个 session:")
+    for label, _, out, map_id in sessions:
+        print(f"  {label} → {map_id}")
 
     global_exit = 0
-    for label, bag_dir, output_dir in sessions:
-        if _process_one(label, bag_dir, output_dir, args) != 0:
+    for label, bag_dir, output_dir, map_id in sessions:
+        if _process_one(label, bag_dir, output_dir, map_id, args) != 0:
             global_exit = 1
-
-    # 确保 Questions/ 目录存在（QA 占位）
-    questions_dir = os.path.join(datasets_dir, "Questions")
-    os.makedirs(questions_dir, exist_ok=True)
 
     return global_exit
 
 
-def _process_one(label: str, bag_dir: str, output_dir: str, args) -> int:
+def _process_one(label: str, bag_dir: str, output_dir: str, map_id: str, args) -> int:
     """处理单个 session 的提取。"""
     os.makedirs(output_dir, exist_ok=True)
     session_id = label  # e.g. "session_001"
 
     print(f"\n{'='*60}")
-    print(f"  [{label}] {bag_dir}  →  {output_dir}")
+    print(f"  [{label}] 地图: {map_id}")
+    print(f"  {bag_dir}  →  {output_dir}")
     print(f"{'='*60}")
 
     if not os.path.exists(bag_dir):
@@ -418,93 +465,92 @@ def _process_one(label: str, bag_dir: str, output_dir: str, args) -> int:
             if rc != 0:
                 exit_code = rc
 
-    # ---- Phase 6: 相机标定提取 --------------------------------------------
+    # ---- Phase 6-10: nodes 模块（含相机标定、视频编码、记忆节点等）--------
     if "nodes" in modules:
-        # camera_calib.yaml: 优先从 bag 的 camera_info 提取出厂标定内参（离线可复现），
-        # 旧 bag 无 camera_info 时由 extract_calib.py 回退到 templates 里的实测值。
-        calib_yaml = os.path.join(output_dir, "camera_calib.yaml")
-        if not os.path.exists(calib_yaml):
-            rc = run_script("extract_calib.py", [bag_dir, output_dir], "相机标定提取")
-            if rc != 0:
-                exit_code = rc
-
-    # ---- Phase 6b: 模板拷贝 ------------------------------------------------
-    if "nodes" in modules:
-        templates_dir = os.path.join(os.path.abspath(os.path.join(SCRIPT_DIR, "..")), "templates")
-        if os.path.isdir(templates_dir):
-            for tpl_name in ("videos_index.csv", "events.yaml"):
-                tpl_src = os.path.join(templates_dir, tpl_name)
-                tpl_dst = os.path.join(output_dir, tpl_name)
-                if os.path.exists(tpl_src) and not os.path.exists(tpl_dst):
-                    shutil.copy2(tpl_src, tpl_dst)
-                    print(f"  ✓ 模板 → {tpl_dst}")
-
-        # 拷贝会话元信息 meta.yaml（从 raw/ 到 datasets/）
-        src_meta = os.path.join(bag_dir, "meta.yaml")
-        if os.path.exists(src_meta):
-            dst_meta = os.path.join(output_dir, "meta.yaml")
-            if not os.path.exists(dst_meta):
-                shutil.copy2(src_meta, dst_meta)
-                print(f"  ✓ 会话元信息 meta.yaml → {dst_meta}")
+        if args.skip_existing and check_exists(output_dir, skip_checks["nodes"]):
+            print("\n  ⏭ 跳过 nodes 模块 (已存在)")
         else:
-            print(f"  ⓘ 未找到 {src_meta}，数据集内无 meta.yaml")
+            # ---- Phase 6: 相机标定提取 ----------------------------------------
+            # camera_calib.yaml: 优先从 bag 的 camera_info 提取出厂标定内参（离线可复现），
+            # 旧 bag 无 camera_info 时由 extract_calib.py 回退到 templates 里的实测值。
+            calib_yaml = os.path.join(output_dir, "camera_calib.yaml")
+            if not os.path.exists(calib_yaml):
+                rc = run_script("extract_calib.py", [bag_dir, output_dir], "相机标定提取")
+                if rc != 0:
+                    exit_code = rc
 
-    # ---- Phase 7: 数据增强 ------------------------------------------------
-    if "nodes" in modules:
-        print(f"\n{'='*60}")
-        print(f"  Phase: 数据增强")
-        print(f"{'='*60}")
-        enrich_images_csv(output_dir)
-        enrich_depth_csv(output_dir)
+            # ---- Phase 6b: 模板拷贝 --------------------------------------------
+            templates_dir = os.path.join(os.path.abspath(os.path.join(SCRIPT_DIR, "..")), "templates")
+            if os.path.isdir(templates_dir):
+                for tpl_name in ("videos_index.csv", "events.yaml"):
+                    tpl_src = os.path.join(templates_dir, tpl_name)
+                    tpl_dst = os.path.join(output_dir, tpl_name)
+                    if os.path.exists(tpl_src) and not os.path.exists(tpl_dst):
+                        shutil.copy2(tpl_src, tpl_dst)
+                        print(f"  ✓ 模板 → {tpl_dst}")
 
-    # ---- Phase 8: 视频编码 ------------------------------------------------
-    if "nodes" in modules:
-        print(f"\n{'='*60}")
-        print(f"  Phase: 视频编码")
-        print(f"{'='*60}")
-        rc = run_script("build_videos.py", [output_dir], "图像序列 → 视频流")
-        if rc != 0:
-            print(f"  ⚠ 视频编码失败，继续...")
+            # 拷贝会话元信息 meta.yaml（从 raw/ 到 datasets/）
+            src_meta = os.path.join(bag_dir, "meta.yaml")
+            if os.path.exists(src_meta):
+                dst_meta = os.path.join(output_dir, "meta.yaml")
+                if not os.path.exists(dst_meta):
+                    shutil.copy2(src_meta, dst_meta)
+                    print(f"  ✓ 会话元信息 meta.yaml → {dst_meta}")
+            else:
+                print(f"  ⓘ 未找到 {src_meta}，数据集内无 meta.yaml")
 
-    # ---- Phase 9: 记忆节点 ------------------------------------------------
-    if "nodes" in modules:
-        graph_src = os.path.join(bag_dir, "memory", "graph_store.json")
-        calib_yaml = os.path.join(output_dir, "camera_calib.yaml")
+            # ---- Phase 7: 数据增强 --------------------------------------------
+            print(f"\n{'='*60}")
+            print(f"  Phase: 数据增强")
+            print(f"{'='*60}")
+            enrich_images_csv(output_dir)
+            enrich_depth_csv(output_dir)
 
-        if os.path.exists(graph_src):
-            rc = run_script(
-                "convert_memory_nodes.py",
-                [
-                    "--graph", graph_src,
-                    "--calib", calib_yaml,
-                    "--images-csv", os.path.join(output_dir, "images_index.csv"),
-                    "--depth-csv", os.path.join(output_dir, "depth_index.csv"),
-                    "--odom-csv", os.path.join(output_dir, "odometry.csv"),
-                    "--session-id", session_id,
-                    "--output", os.path.join(output_dir, "memory_nodes.json"),
-                ],
-                "记忆节点转换 (graph_store.json → memory_nodes.json)",
-            )
+            # ---- Phase 8: 视频编码 --------------------------------------------
+            print(f"\n{'='*60}")
+            print(f"  Phase: 视频编码")
+            print(f"{'='*60}")
+            rc = run_script("build_videos.py", [output_dir], "图像序列 → 视频流")
             if rc != 0:
-                exit_code = rc
-        else:
-            print(f"\n  ⚠ 未找到 graph_store.json ({graph_src})，回退到轨迹采样方式")
-            rc = run_script(
-                "build_memory_nodes.py",
-                [
-                    "--output-dir", output_dir,
-                    "--bag-dir", bag_dir,
-                    "--sample-interval", str(args.sample_interval),
-                    "--sample-distance", str(args.sample_distance),
-                ],
-                "记忆节点构建 (轨迹采样回退)",
-            )
-            if rc != 0:
-                exit_code = rc
+                print(f"  ⚠ 视频编码失败，继续...")
 
-    # ---- Phase 10: 生成 dataset_manifest.yaml -------------------------------
-    if "nodes" in modules:
-        generate_manifest(output_dir, args.scene, session_id)
+            # ---- Phase 9: 记忆节点 --------------------------------------------
+            graph_src = os.path.join(bag_dir, "memory", "graph_store.json")
+            calib_yaml = os.path.join(output_dir, "camera_calib.yaml")
+
+            if os.path.exists(graph_src):
+                rc = run_script(
+                    "convert_memory_nodes.py",
+                    [
+                        "--graph", graph_src,
+                        "--calib", calib_yaml,
+                        "--images-csv", os.path.join(output_dir, "images_index.csv"),
+                        "--depth-csv", os.path.join(output_dir, "depth_index.csv"),
+                        "--odom-csv", os.path.join(output_dir, "odometry.csv"),
+                        "--session-id", session_id,
+                        "--output", os.path.join(output_dir, "memory_nodes.json"),
+                    ],
+                    "记忆节点转换 (graph_store.json → memory_nodes.json)",
+                )
+                if rc != 0:
+                    exit_code = rc
+            else:
+                print(f"\n  ⚠ 未找到 graph_store.json ({graph_src})，回退到轨迹采样方式")
+                rc = run_script(
+                    "build_memory_nodes.py",
+                    [
+                        "--output-dir", output_dir,
+                        "--bag-dir", bag_dir,
+                        "--sample-interval", str(args.sample_interval),
+                        "--sample-distance", str(args.sample_distance),
+                    ],
+                    "记忆节点构建 (轨迹采样回退)",
+                )
+                if rc != 0:
+                    exit_code = rc
+
+            # ---- Phase 10: 生成 dataset_manifest.yaml -------------------------
+            generate_manifest(output_dir, map_id, session_id)
 
     # ---- 汇总 ---------------------------------------------------------
     print(f"\n{'='*60}")

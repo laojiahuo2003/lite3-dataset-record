@@ -192,14 +192,9 @@ def _node_summary(node: dict) -> str:
     return node.get("summary", "")
 
 
-def _find_scenes_dir(project_dir: str) -> str:
-    """Auto-discover the scenes directory (e.g. datasets/scenes1)."""
-    datasets = os.path.join(project_dir, "datasets")
-    for name in sorted(os.listdir(datasets)):
-        full = os.path.join(datasets, name)
-        if os.path.isdir(full) and name.startswith("scenes"):
-            return full
-    return os.path.join(datasets, "scenes")  # fallback
+def _find_maps_dir(project_dir: str) -> str:
+    """Auto-discover the datasets directory (e.g. datasets/)."""
+    return os.path.join(project_dir, "datasets")
 
 
 def _detect_map_id(output_dir: str, project_dir: str) -> str:
@@ -473,9 +468,11 @@ def visualize(output_dir: str):
 
     if map_traj:
         traj = map_traj
-        scenes_dir = _find_scenes_dir(project_dir)
+        datasets_dir = _find_maps_dir(project_dir)
         if map_id:
-            map_img, map_extent, rooms = _load_map_background(scenes_dir, map_id)
+            # 新结构：datasets/map_xxx/
+            map_dir = os.path.join(datasets_dir, map_id)
+            map_img, map_extent, rooms = _load_map_background(map_dir, map_id)
             map_label = f"地图 {map_id}" if map_img is not None else f"map→base_link (无地图图)"
         else:
             map_label = "map→base_link (无地图绑定)"

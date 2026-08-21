@@ -250,11 +250,10 @@ def build_scene_def(state: dict, maps_dir: Path) -> dict:
         })
 
     scene = {
-        "scene_id": "scenes1",
+        "map_id": map_id,
         "scene_name_zh": map_id or "未命名场景",      # default from map_id
         "scene_name_en": map_id or "Unnamed Scene",
         "total_area_m2": round(sum(r["area_m2"] for r in regions), 2),
-        "map_id": map_id,
         "captured_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "robot_pose": state.get("robot"),
         "regions": regions,
@@ -315,7 +314,6 @@ def main() -> int:
     ap.add_argument("--maps-dir", default=str(DEFAULT_MAPS_DIR))
     ap.add_argument("--min-conf", type=float, default=0.0, help="物体置信度下限，默认 0")
     ap.add_argument("--project-dir", default=str(PROJECT_DIR))
-    ap.add_argument("--scene", default="scenes1", help="场景目录名 (默认 scenes1)")
     args = ap.parse_args()
 
     session_id = args.session.zfill(3) if args.session.isdigit() else args.session
@@ -328,21 +326,25 @@ def main() -> int:
         print("✗ scene 服务不可达；请确认机器狗已 ./start.sh 且 scene 已就绪", file=sys.stderr)
         return 1
 
+    # 先获取 map_id
+    scene_def = build_scene_def(state, maps_dir)
+    map_id = scene_def["map_id"] or "unknown_map"
+
+    # 输出到新结构：datasets/map_xxx/session_yyy/
+    session_dir = project / "datasets" / map_id / f"session_{session_id}"
+
     objects_gt = build_objects_gt(state, session_id, args.min_conf)
-    scene_name = args.scene
-    obj_path = project / "datasets" / scene_name / f"session_{session_id}" / "objects.yaml"
+    obj_path = session_dir / "objects.yaml"
     _dump_yaml(obj_path, objects_gt)
     print(f"✓ 物体标注 {objects_gt['object_count']} 个 → {obj_path}")
 
-    # 一张地图一个目录，多个 session 共享
-    scene_def = build_scene_def(state, maps_dir)
-    map_id = scene_def["map_id"] or "unknown_map"
-    scene_dir = project / "datasets" / scene_name / map_id
-    _dump_yaml(scene_dir / "scene.yaml", scene_def)
-    print(f"✓ 场景定义（{len(scene_def['regions'])} 房间）→ {scene_dir / 'scene.yaml'}")
+    # 地图级别的 scene.yaml 和 layout.png
+    map_dir = project / "datasets" / map_id
+    _dump_yaml(map_dir / "scene.yaml", scene_def)
+    print(f"✓ 场景定义（{len(scene_def['regions'])} 房间）→ {map_dir / 'scene.yaml'}")
 
-    if copy_layout(map_id, maps_dir, scene_dir):
-        print(f"✓ 平面图 → {scene_dir / 'layout.png'}")
+    if copy_layout(map_id, maps_dir, map_dir):
+        print(f"✓ 平面图 → {map_dir / 'layout.png'}")
     else:
         print(f"  ⓘ 地图 '{map_id}' 尚未保存 occupancy.png，跳过平面图（房间多边形已在场景定义中）")
 

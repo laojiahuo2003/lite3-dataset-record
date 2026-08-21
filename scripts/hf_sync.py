@@ -4,9 +4,13 @@
 国内网络直连 huggingface.co 不通，默认走官方镜像 hf-mirror.com（上传/下载都支持）。
 
 用法:
-  # 上传（默认把 datasets/<scene>/ 推上去，scene 默认 scenes1）
+  # 上传所有地图数据
   python3 scripts/hf_sync.py upload YOUR_USERNAME/scribemem-bench
-  python3 scripts/hf_sync.py upload YOUR_USERNAME/scribemem-bench --scene scenes1
+
+  # 上传指定地图
+  python3 scripts/hf_sync.py upload YOUR_USERNAME/scribemem-bench --map map_f1
+
+  # 连同 raw rosbag 一起传
   python3 scripts/hf_sync.py upload YOUR_USERNAME/scribemem-bench --include raw --sessions 001,002
 
   # 下载（到本地目录）
@@ -54,24 +58,45 @@ def upload(args) -> None:
     _ensure_login()
 
     datasets_root = os.path.join(PROJECT_DIR, "datasets")
-    scene = args.scene
-    scene_dir = os.path.join(datasets_root, scene)
-    if not os.path.isdir(scene_dir):
-        sys.exit(f"✗ 目录不存在: {scene_dir}")
 
-    print(f"▸ 上传到 {args.repo_id} (端点 {ENDPOINT})")
-    print(f"  来源: {scene_dir}/")
-    print(f"  远端: {scene}/")
-    print("  已上传的文件会自动跳过（增量、断点续传）...\n")
+    # 新结构：支持上传单个地图或所有地图
+    if args.map:
+        map_dir = os.path.join(datasets_root, args.map)
+        if not os.path.isdir(map_dir):
+            sys.exit(f"✗ 目录不存在: {map_dir}")
 
-    # upload_large_folder：适合大量小文件，分块提交、可断点续传、容错。
-    # 从 datasets/ 根上传，allow_patterns 只挑目标场景，保留 scenes1/... 目录结构。
-    api.upload_large_folder(
-        repo_id=args.repo_id,
-        repo_type="dataset",
-        folder_path=datasets_root,
-        allow_patterns=[f"{scene}/**"],
-    )
+        print(f"▸ 上传到 {args.repo_id} (端点 {ENDPOINT})")
+        print(f"  来源: {map_dir}/")
+        print(f"  远端: {args.map}/")
+        print("  已上传的文件会自动跳过（增量、断点续传）...\n")
+
+        api.upload_large_folder(
+            repo_id=args.repo_id,
+            repo_type="dataset",
+            folder_path=datasets_root,
+            allow_patterns=[f"{args.map}/**"],
+        )
+    else:
+        # 上传所有 map_* 目录
+        maps = [d for d in os.listdir(datasets_root)
+                if os.path.isdir(os.path.join(datasets_root, d)) and d.startswith("map_")]
+
+        if not maps:
+            sys.exit(f"✗ 未找到任何 map_* 目录在 {datasets_root}")
+
+        print(f"▸ 上传到 {args.repo_id} (端点 {ENDPOINT})")
+        print(f"  来源: {datasets_root}/")
+        print(f"  发现 {len(maps)} 个地图: {', '.join(maps)}")
+        print("  已上传的文件会自动跳过（增量、断点续传）...\n")
+
+        for map_name in maps:
+            print(f"  ▸ 上传 {map_name}/ ...")
+            api.upload_large_folder(
+                repo_id=args.repo_id,
+                repo_type="dataset",
+                folder_path=datasets_root,
+                allow_patterns=[f"{map_name}/**"],
+            )
 
     if args.include == "raw" and args.sessions:
         raw_root = os.path.join(PROJECT_DIR, "raw")
@@ -105,13 +130,40 @@ def download(args) -> None:
     print(f"\n✓ 下载完成 → {local}")
 
 
+def delete(args) -> None:
+    """删除远程仓库中的文件或目录"""
+    _ensure_login()
+
+    path = args.path.strip("/")
+    if not path:
+        sys.exit("✗ 路径不能为空")
+
+    print(f"▸ 从 {args.repo_id} 删除: {path}")
+
+    if not args.yes:
+        confirm = input(f"  确认删除 '{path}' ? [y/N] ")
+        if confirm.lower() != 'y':
+            print("✗ 已取消")
+            return
+
+    try:
+        api.delete_folder(
+            repo_id=args.repo_id,
+            repo_type="dataset",
+            path_in_repo=path,
+        )
+        print(f"✓ 已删除: {path}")
+    except Exception as e:
+        sys.exit(f"✗ 删除失败: {e}")
+
+
 def main():
     p = argparse.ArgumentParser(description="HF 数据集同步 (ScribeMem-Bench)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pu = sub.add_parser("upload", help="上传本地数据集到 HF")
     pu.add_argument("repo_id", help="如 YOUR_USERNAME/scribemem-bench")
-    pu.add_argument("--scene", default="scenes1", help="datasets/<scene> 目录名 (默认 scenes1)")
+    pu.add_argument("--map", default="", help="指定地图目录名（如 map_f1），留空则上传所有 map_*")
     pu.add_argument("--include", choices=["datasets", "raw"], default="datasets",
                     help="只传 datasets，或连同 raw rosbag 一起传")
     pu.add_argument("--sessions", default="", help="要一起上传的 raw session，如 001,002")
@@ -121,6 +173,12 @@ def main():
     pd.add_argument("repo_id", help="如 YOUR_USERNAME/scribemem-bench")
     pd.add_argument("--local-dir", default="", help="本地目标目录 (默认 ./hf_data)")
     pd.set_defaults(func=download)
+
+    pdel = sub.add_parser("delete", help="从 HF 仓库删除文件或目录")
+    pdel.add_argument("repo_id", help="如 YOUR_USERNAME/scribemem-bench")
+    pdel.add_argument("path", help="要删除的路径（如 scenes1）")
+    pdel.add_argument("-y", "--yes", action="store_true", help="跳过确认")
+    pdel.set_defaults(func=delete)
 
     args = p.parse_args()
     args.func(args)

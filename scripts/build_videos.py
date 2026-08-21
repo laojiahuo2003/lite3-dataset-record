@@ -15,9 +15,9 @@
   output_dir/videos_index.csv            视频流索引
 
 用法:
-  python3 scripts/build_videos.py datasets/scenes1/session_001
-  python3 scripts/build_videos.py datasets/scenes1/session_001 --no-depth
-  python3 scripts/build_videos.py datasets/scenes1/session_001 --no-preview
+  python3 scripts/build_videos.py datasets/map_f1/session_001
+  python3 scripts/build_videos.py datasets/map_f1/session_001 --no-depth
+  python3 scripts/build_videos.py datasets/map_f1/session_001 --no-preview
 """
 
 import argparse
